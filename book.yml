@@ -1,0 +1,17 @@
+title: "構文解析入門"
+author: "ligarb AI"
+language: "ja"
+ai_generated: true
+bibliography: references.bib
+chapters:
+  - cover: cover.md
+  - introduction.md
+  - grammar-and-trees.md
+  - recursive-descent.md
+  - parser-generators.md
+  - many-generators.md
+  - parsing-theory.md
+  - frontiers.md
+  - in-the-wild.md
+  - appendix:
+    - glossary.md
