@@ -15,3 +15,8 @@ chapters:
   - in-the-wild.md
   - appendix:
     - glossary.md
+
+repository: "https://github.com/ko1/book_parser_intro"
+
+github_review:
+  enabled: true

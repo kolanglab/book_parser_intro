@@ -4,7 +4,7 @@
 
 ## 作るもの ── 四則演算の電卓
 
-ゴールは、`1 + 2 * 3` や `(1 + 2) * 3 - 4` のような文字列を受け取り、正しい優先順位で計算して数値を返すプログラムです。実装言語には Python を使います。全体は3つの部品からなります。
+ゴールは、`1 + 2 * 3` や `(1 + 2) * 3 - 4` のような文字列を受け取り、正しい優先順位で計算して数値を返すプログラムです。ここからは実際にコードを書いていきますが、本書ではプログラミング言語に **Ruby** を使って書いてみましょう。簡潔で読みやすく、文法とコードの対応を追いやすいからです。再帰下降パーサの考え方自体はどの言語でも変わらないので、ほかの言語に読み替えるのも難しくありません。さて、プログラムの全体は3つの部品からなります。
 
 1. **字句解析器（lexer）**：文字列をトークン列に変える。
 2. **構文解析器（parser）**：トークン列を AST に変える。
@@ -16,44 +16,49 @@
 
 まずは文字列をトークンに区切る部分です。今回のトークンは、整数・`+`・`-`・`*`・`/`・`(`・`)` の7種類。空白は読み飛ばします。トークンは「種別（kind）」と「値（value）」の組として表すことにします。
 
-```python
-import re
+```ruby
+require "strscan"
 
-# トークンは (種別, 値) のタプルで表す
+# トークンは [種別, 値] の配列で表す
 TOKEN_SPEC = [
-    ("NUMBER", r"\d+"),     # 整数: 数字の1回以上の繰り返し
-    ("PLUS",   r"\+"),
-    ("MINUS",  r"-"),
-    ("STAR",   r"\*"),
-    ("SLASH",  r"/"),
-    ("LPAREN", r"\("),
-    ("RPAREN", r"\)"),
-    ("SKIP",   r"\s+"),     # 空白は読み飛ばす
+  [:NUMBER, /\d+/],     # 整数: 数字の1回以上の繰り返し
+  [:PLUS,   /\+/],
+  [:MINUS,  /-/],
+  [:STAR,   /\*/],
+  [:SLASH,  /\//],
+  [:LPAREN, /\(/],
+  [:RPAREN, /\)/],
+  [:SKIP,   /\s+/],     # 空白は読み飛ばす
 ]
 
-def tokenize(source):
-    # 全パターンを名前付きグループで1本の正規表現にまとめる
-    regex = "|".join(f"(?P<{name}>{pat})" for name, pat in TOKEN_SPEC)
-    tokens = []
-    for m in re.finditer(regex, source):
-        kind = m.lastgroup
-        value = m.group()
-        if kind == "SKIP":
-            continue                # 空白はトークンにしない
-        if kind == "NUMBER":
-            value = int(value)      # 文字列 "23" を数値 23 に変換
-        tokens.append((kind, value))
-    tokens.append(("EOF", None))    # 入力の終わりを示す番兵
-    return tokens
+def tokenize(source)
+  s = StringScanner.new(source)
+  tokens = []
+  until s.eos?
+    kind = value = nil
+    TOKEN_SPEC.each do |name, pat|         # 各トークンの正規表現を先頭から順に試す
+      if (m = s.scan(pat))
+        kind, value = name, m
+        break
+      end
+    end
+    raise "解析できない文字: #{s.rest.inspect}" if kind.nil?
+    next if kind == :SKIP                   # 空白はトークンにしない
+    value = value.to_i if kind == :NUMBER   # 文字列 "23" を数値 23 に変換
+    tokens << [kind, value]
+  end
+  tokens << [:EOF, nil]                     # 入力の終わりを示す番兵
+  tokens
+end
 ```
 
 ポイントは2つあります。第一に、各トークン種別を正規表現で定義している点です。前章で「字句解析は正規表現の守備範囲」と述べたとおり、整数は `\d+`、記号はその文字そのもの、という素直な対応になっています。第二に、末尾に `EOF`（end of file, 入力終端）という特別なトークンを付け加えている点です。これは「もう入力は終わり」を表す番兵で、パーサが「まだ続きがあるはず」と「もう終わり」を区別するのに使います。番兵を置いておくと、入力の終端チェックが特別扱いなしに書けて便利です。
 
-`tokenize("1 + 2 * 3")` を呼ぶと、次のリストが得られます。
+`tokenize("1 + 2 * 3")` を呼ぶと、次の配列が得られます。
 
-```python
-[("NUMBER", 1), ("PLUS", "+"), ("NUMBER", 2),
- ("STAR", "*"), ("NUMBER", 3), ("EOF", None)]
+```ruby
+[[:NUMBER, 1], [:PLUS, "+"], [:NUMBER, 2],
+ [:STAR, "*"], [:NUMBER, 3], [:EOF, nil]]
 ```
 
 ## 文法を関数に翻訳する ── 再帰下降の核心
@@ -68,28 +73,31 @@ factor ::= "(" expr ")" | number
 
 前章の左再帰（`expr ::= expr "+" term`）を、ここでは EBNF の繰り返し `*` を使った形に書き換えてあります。理由は後で説明しますが、ひとまずこの3つの規則に、3つの関数 `parse_expr`・`parse_term`・`parse_factor` を対応させます。各関数は「自分の担当する構造を読み取って、その AST を返す」役割を持ちます。
 
-AST のノードは、簡単のためタプルで表すことにします。`("num", 3)` は整数3、`("binop", "+", 左, 右)` は二項演算です。
+AST のノードは、簡単のため配列で表すことにします。`[:num, 3]` は整数3、`[:binop, "+", 左, 右]` は二項演算です。
 
-```python
-class Parser:
-    def __init__(self, tokens):
-        self.tokens = tokens
-        self.pos = 0                       # いま見ているトークンの位置
+```ruby
+class Parser
+  def initialize(tokens)
+    @tokens = tokens
+    @pos = 0                       # いま見ているトークンの位置
+  end
 
-    def peek(self):
-        return self.tokens[self.pos]       # 現在のトークンを覗く（消費しない）
+  def peek
+    @tokens[@pos]                  # 現在のトークンを覗く（消費しない）
+  end
 
-    def advance(self):
-        tok = self.tokens[self.pos]
-        self.pos += 1                      # 1つ読み進める
-        return tok
+  def advance
+    tok = @tokens[@pos]
+    @pos += 1                      # 1つ読み進める
+    tok
+  end
 
-    def expect(self, kind):
-        # 期待した種別なら消費、違えば構文エラー
-        tok = self.peek()
-        if tok[0] != kind:
-            raise SyntaxError(f"{kind} を期待しましたが {tok[0]} が来ました")
-        return self.advance()
+  def expect(kind)
+    # 期待した種別なら消費、違えば構文エラー
+    tok = peek
+    raise "#{kind} を期待しましたが #{tok[0]} が来ました" if tok[0] != kind
+    advance
+  end
 ```
 
 `peek` は「次のトークンを消費せずに覗く」、`advance` は「1つ読み進める」操作です。再帰下降パーサは、この「先読み（lookahead）」をもとに、次にどの規則を適用すべきかを決めながら進みます。
@@ -98,19 +106,21 @@ class Parser:
 
 文法の一番深いところにある `factor` から書きましょう。`factor` は「括弧で囲まれた式」または「数値」です。先頭のトークンを見れば、どちらかすぐ分かります。
 
-```python
-    def parse_factor(self):
-        tok = self.peek()
-        if tok[0] == "LPAREN":             # "(" expr ")"
-            self.advance()                 # "(" を消費
-            node = self.parse_expr()       # 中身を再帰的にパース
-            self.expect("RPAREN")          # ")" を消費（なければエラー）
-            return node
-        elif tok[0] == "NUMBER":           # number
-            self.advance()
-            return ("num", tok[1])
-        else:
-            raise SyntaxError(f"数または ( を期待しましたが {tok[0]} が来ました")
+```ruby
+  def parse_factor
+    tok = peek
+    if tok[0] == :LPAREN           # "(" expr ")"
+      advance                      # "(" を消費
+      node = parse_expr            # 中身を再帰的にパース
+      expect(:RPAREN)              # ")" を消費（なければエラー）
+      node
+    elsif tok[0] == :NUMBER        # number
+      advance
+      [:num, tok[1]]
+    else
+      raise "数または ( を期待しましたが #{tok[0]} が来ました"
+    end
+  end
 ```
 
 注目すべきは、括弧の中身を読むのに `parse_expr` を呼んでいる点です。`factor` は `expr` を呼び、`expr` は（後で見るように）`term` を、`term` は `factor` を呼ぶ。この**関数同士の再帰呼び出し**が、入れ子の括弧という再帰的な構造をそのまま捌くのです。「再帰下降」という名前は、規則をたどって木を**下って（descent）**いきながら、必要なところで**再帰（recursive）**することに由来します。
@@ -119,31 +129,37 @@ class Parser:
 
 次に `term` です。`term` は「`factor` で始まり、その後ろに『`*` または `/` と factor』が0回以上続く」構造でした。「0回以上続く」はそのままループになります。
 
-```python
-    def parse_term(self):
-        node = self.parse_factor()                 # まず最初の factor
-        while self.peek()[0] in ("STAR", "SLASH"): # * か / が続く限り
-            op = self.advance()[1]                  # 演算子を取得
-            right = self.parse_factor()             # 右側の factor
-            node = ("binop", op, node, right)       # 左結合で木を伸ばす
-        return node
+```ruby
+  def parse_term
+    node = parse_factor                        # まず最初の factor
+    while [:STAR, :SLASH].include?(peek[0])    # * か / が続く限り
+      op = advance[1]                          # 演算子を取得
+      right = parse_factor                     # 右側の factor
+      node = [:binop, op, node, right]         # 左結合で木を伸ばす
+    end
+    node
+  end
 ```
 
 ループの中で `node = ("binop", op, node, right)` とすることで、`2 * 3 * 4` が `((2 * 3) * 4)` のように**左から**まとまります。これが**左結合**の実現です。`expr` も構造はまったく同じで、扱う演算子が `+`／`-` で、子が `term` になるだけです。
 
-```python
-    def parse_expr(self):
-        node = self.parse_term()
-        while self.peek()[0] in ("PLUS", "MINUS"):
-            op = self.advance()[1]
-            right = self.parse_term()
-            node = ("binop", op, node, right)
-        return node
+```ruby
+  def parse_expr
+    node = parse_term
+    while [:PLUS, :MINUS].include?(peek[0])
+      op = advance[1]
+      right = parse_term
+      node = [:binop, op, node, right]
+    end
+    node
+  end
 
-    def parse(self):
-        node = self.parse_expr()
-        self.expect("EOF")    # 式を読み終えたら入力も終わっているはず
-        return node
+  def parse
+    node = parse_expr
+    expect(:EOF)    # 式を読み終えたら入力も終わっているはず
+    node
+  end
+end
 ```
 
 `parse_expr` が `parse_term` を、`parse_term` が `parse_factor` を呼ぶ階層構造に注目してください。`expr` が一番外側（足し算）、`term` が中間（掛け算）、`factor` が最内（数・括弧）という呼び出しの深さの違いが、そのまま**優先順位**を生み出しています。掛け算は足し算より深い場所で組み上がるので、必ず先にまとまるのです。前章で「文法の階層が優先順位を表す」と述べたことが、コードの呼び出し階層として目に見える形で現れました。
@@ -152,10 +168,11 @@ class Parser:
 
 ここで、文法を `expr ::= expr "+" term` から `expr ::= term ("+" term)*` に書き換えた理由を回収します。もし素直に左再帰のまま `parse_expr` を書くと、こうなってしまいます。
 
-```python
-    def parse_expr_BAD(self):
-        left = self.parse_expr_BAD()   # 自分自身を、何も消費せずに呼ぶ！
-        ...
+```ruby
+  def parse_expr_BAD
+    left = parse_expr_BAD   # 自分自身を、何も消費せずに呼ぶ！
+    # ...
+  end
 ```
 
 `parse_expr_BAD` は何のトークンも消費しないまま自分自身を呼び、そのまた自分自身を呼び……と、**無限再帰**に陥ってスタックを溢れさせます。これが **左再帰（left recursion）** の問題です。再帰下降パーサは「規則の左端から順にトークンを消費していく」ことで前進するので、左端に自分自身が来る規則と相性が悪いのです。
@@ -167,24 +184,29 @@ class Parser:
 
 パースが終われば AST が手に入ります。あとはそれをたどって計算するだけです。評価器は AST の構造そのままに、再帰で書けます。
 
-```python
-def evaluate(node):
-    if node[0] == "num":
-        return node[1]
-    elif node[0] == "binop":
-        op, left, right = node[1], node[2], node[3]
-        l = evaluate(left)             # 左の子を再帰的に評価
-        r = evaluate(right)            # 右の子を再帰的に評価
-        if op == "+": return l + r
-        if op == "-": return l - r
-        if op == "*": return l * r
-        if op == "/": return l // r
+```ruby
+def evaluate(node)
+  case node[0]
+  when :num
+    node[1]
+  when :binop
+    op, left, right = node[1], node[2], node[3]
+    l = evaluate(left)             # 左の子を再帰的に評価
+    r = evaluate(right)            # 右の子を再帰的に評価
+    case op
+    when "+" then l + r
+    when "-" then l - r
+    when "*" then l * r
+    when "/" then l / r            # 整数同士なので整数除算
+    end
+  end
+end
 
 # 使ってみる
 tokens = tokenize("1 + 2 * 3")
-ast = Parser(tokens).parse()
-print(ast)              # ('binop', '+', ('num', 1), ('binop', '*', ('num', 2), ('num', 3)))
-print(evaluate(ast))   # 7
+ast = Parser.new(tokens).parse
+p ast              # [:binop, "+", [:num, 1], [:binop, "*", [:num, 2], [:num, 3]]]
+puts evaluate(ast) # 7
 ```
 
 `1 + 2 * 3` がきちんと 7 になりました。`2 * 3` が先にまとまり、その結果に 1 が足される ── 私たちが望んだ優先順位どおりです。文字列のどこにも「掛け算が先」とは書かれていないのに、文法の構造と関数の呼び出し階層だけからそれが導かれた点を、もう一度味わってください。
