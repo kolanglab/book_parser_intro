@@ -1,12 +1,12 @@
 # 構文解析入門
 
-📖 **公開版（GitHub Pages）**: https://ko1.github.io/book_parser_intro/
+📖 **公開版（GitHub Pages）**: https://kolanglab.github.io/book_parser_intro/
 
 この本は [ligarb](https://github.com/ko1/ligarb) で生成しています。
 
 ## フィードバック
 
-本文の誤り・わかりにくい点・疑問は [Issue](https://github.com/ko1/book_parser_intro/issues/new?template=book-feedback.yml) からどうぞ。
+本文の誤り・わかりにくい点・疑問は [Issue](https://github.com/kolanglab/book_parser_intro/issues/new?template=book-feedback.yml) からどうぞ。
 公開ページでは本文を選択して「Report as issue」からも送れます。
 
 ## ローカルでビルド

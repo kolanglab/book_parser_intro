@@ -16,7 +16,7 @@ chapters:
   - appendix:
     - glossary.md
 
-repository: "https://github.com/ko1/book_parser_intro"
+repository: "https://github.com/kolanglab/book_parser_intro"
 
 github_review:
   enabled: true
