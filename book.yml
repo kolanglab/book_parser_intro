@@ -1,4 +1,5 @@
 title: "構文解析入門"
+description: "AST の作り方を、簡単な文法からパーサージェネレータ・理論・最先端まで網羅する入門"
 author: "ligarb AI"
 language: "ja"
 ai_generated: true
